@@ -4,7 +4,7 @@
 Reads victims from the public API (or a local JSON dump) and reports rows where
 the stored country disagrees with the domain's ccTLD or with a country the
 description explicitly states. No LLM involved; add --llm to also re-ask the
-resolver for the flagged rows (needs ANTHROPIC_API_KEY).
+resolver for the flagged rows (needs ANTHROPIC_API_KEY or OPENAI_API_KEY).
 
     audit_countries.py --country FI
     audit_countries.py --file victims.json
@@ -15,7 +15,7 @@ import os
 import sys
 import urllib.request
 
-from country_resolver import ask_llm, description_country, fetch_site_evidence, resolve_country, tld_country, valid_code
+from country_resolver import ask_llm, description_country, fetch_site_evidence, pick_provider, resolve_country, tld_country, valid_code
 
 API = "https://api.ransomware.live/v2"
 
@@ -36,12 +36,11 @@ def main():
     ap.add_argument('--llm', action='store_true', help='re-resolve flagged rows with the LLM')
     args = ap.parse_args()
 
-    key = os.getenv('ANTHROPIC_API_KEY')
     llm = None
     if args.llm:
-        if not key:
-            sys.exit('ANTHROPIC_API_KEY is not set')
-        llm = lambda v, w, t, d, ai, facts: ask_llm(key, v, w, t, d, ai, facts)
+        if not pick_provider():
+            sys.exit('no LLM configured: set ANTHROPIC_API_KEY or OPENAI_API_KEY')
+        llm = ask_llm
 
     rows = load(args)
     flagged = 0

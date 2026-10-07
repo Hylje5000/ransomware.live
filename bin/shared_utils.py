@@ -896,9 +896,7 @@ def appender(victim,group_name,description='',website='', published='', post_url
     ### Get Country (after website and description, so every signal is available)
     description = description or ''
     description_is_ai = description.startswith('[AI generated]')
-    llm = None
-    if ANTHROPIC_API_KEY:
-        llm = lambda v, w, t, d, ai, facts: country_resolver.ask_llm(ANTHROPIC_API_KEY, v, w, t, d, ai, facts)
+    llm = country_resolver.ask_llm if country_resolver.pick_provider() else None
     country, why = country_resolver.resolve_country(
         victim, description.replace('[AI generated] ', '', 1), website, country,
         description_is_ai=description_is_ai, llm=llm, site=country_resolver.fetch_site_evidence)

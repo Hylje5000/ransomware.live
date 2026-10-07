@@ -167,3 +167,61 @@ def test_site_failure_degrades_gracefully():
 def test_non_english_locale_counts():
     page = '<html lang="fi-FI"><head><title>Acme Oy</title></head></html>'
     assert extract_evidence(page, "Acme", "acme.com", to_code, description_country)["locale"] == "FI"
+
+
+# --- provider selection -----------------------------------------------------
+
+import country_resolver
+
+
+@pytest.fixture
+def clean_env(monkeypatch):
+    for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "COUNTRY_PROVIDER", "COUNTRY_MODEL", "OPENAI_MODEL"):
+        monkeypatch.delenv(k, raising=False)
+    return monkeypatch
+
+
+def fake_providers(monkeypatch, calls):
+    def make(name):
+        return (lambda prompt, model: calls.append((name, model)) or '{"country": "FI", "confidence": "high"}',
+                f"{name.upper()}_API_KEY", {"anthropic": lambda: "claude-x", "openai": lambda: "gpt-x"}[name])
+    monkeypatch.setattr(country_resolver, "PROVIDERS", {n: make(n) for n in ("anthropic", "openai")})
+
+
+def test_no_provider_without_keys(clean_env):
+    assert country_resolver.pick_provider() == ""
+    assert country_resolver.ask_llm("X", "x.com", "", "", False) == {}
+
+
+def test_openai_only_is_used(clean_env):
+    calls = []
+    fake_providers(clean_env, calls)
+    clean_env.setenv("OPENAI_API_KEY", "k")
+    assert country_resolver.ask_llm("X", "x.com", "", "", False)["country"] == "FI"
+    assert calls == [("openai", "gpt-x")]
+
+
+def test_anthropic_preferred_when_both_set_and_provider_can_be_forced(clean_env):
+    calls = []
+    fake_providers(clean_env, calls)
+    clean_env.setenv("ANTHROPIC_API_KEY", "k")
+    clean_env.setenv("OPENAI_API_KEY", "k")
+    country_resolver.ask_llm("X", "x.com", "", "", False)
+    clean_env.setenv("COUNTRY_PROVIDER", "openai")
+    country_resolver.ask_llm("X", "x.com", "", "", False)
+    assert [c[0] for c in calls] == ["anthropic", "openai"]
+
+
+def test_forced_provider_without_key_disables_llm(clean_env):
+    clean_env.setenv("OPENAI_API_KEY", "k")
+    clean_env.setenv("COUNTRY_PROVIDER", "anthropic")
+    assert country_resolver.pick_provider() == ""
+
+
+def test_country_model_override(clean_env):
+    calls = []
+    fake_providers(clean_env, calls)
+    clean_env.setenv("OPENAI_API_KEY", "k")
+    clean_env.setenv("COUNTRY_MODEL", "my-model")
+    country_resolver.ask_llm("X", "x.com", "", "", False)
+    assert calls == [("openai", "my-model")]

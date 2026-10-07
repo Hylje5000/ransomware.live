@@ -219,19 +219,49 @@ def _parse_llm_json(text):
         return {}
 
 
-def ask_llm(api_key, victim, website, tld, description, description_is_ai, facts=None, model=None):
-    """One combined Anthropic call. Returns {'country', 'confidence', 'reason'} or {}."""
+def _complete_anthropic(prompt, model):
     import anthropic  # lazy: keeps the pure helpers importable without the SDK
-    client = anthropic.Anthropic(api_key=api_key)
-    completion = client.messages.create(
-        model=model or os.getenv('COUNTRY_MODEL') or DEFAULT_MODEL,
-        max_tokens=1024,
-        messages=[{"role": "user",
-                   "content": _build_prompt(victim, website, tld, description, description_is_ai, facts)}],
-    )
+    completion = anthropic.Anthropic().messages.create(  # key from ANTHROPIC_API_KEY
+        model=model, max_tokens=1024, messages=[{"role": "user", "content": prompt}])
     # Newer models may lead with a thinking block; take the first text block.
-    text = next((b.text for b in completion.content if getattr(b, 'type', '') == 'text'), '')
-    return _parse_llm_json(text)
+    return next((b.text for b in completion.content if getattr(b, 'type', '') == 'text'), '')
+
+
+def _complete_openai(prompt, model):
+    from openai import OpenAI  # lazy; key from OPENAI_API_KEY
+    completion = OpenAI().chat.completions.create(
+        model=model, max_completion_tokens=1024, messages=[{"role": "user", "content": prompt}])
+    return completion.choices[0].message.content or ''
+
+
+# provider -> (completion function, API key env var, default model)
+PROVIDERS = {
+    'anthropic': (_complete_anthropic, 'ANTHROPIC_API_KEY', lambda: DEFAULT_MODEL),
+    'openai': (_complete_openai, 'OPENAI_API_KEY', lambda: os.getenv('OPENAI_MODEL') or 'gpt-4o'),
+}
+
+
+def pick_provider():
+    """COUNTRY_PROVIDER if set, else the first provider with an API key configured, else ''."""
+    forced = (os.getenv('COUNTRY_PROVIDER') or '').lower()
+    if forced:
+        return forced if forced in PROVIDERS and os.getenv(PROVIDERS[forced][1]) else ''
+    return next((name for name, (_, env, _) in PROVIDERS.items() if os.getenv(env)), '')
+
+
+def ask_llm(victim, website, tld, description, description_is_ai, facts=None):
+    """One combined LLM call on the configured provider.
+
+    Returns {'country', 'confidence', 'reason'}, or {} if no provider is configured.
+    The model comes from COUNTRY_MODEL, else the provider's default (OPENAI_MODEL for OpenAI).
+    """
+    provider = pick_provider()
+    if not provider:
+        return {}
+    complete, _, default_model = PROVIDERS[provider]
+    model = os.getenv('COUNTRY_MODEL') or default_model()
+    prompt = _build_prompt(victim, website, tld, description, description_is_ai, facts)
+    return _parse_llm_json(complete(prompt, model))
 
 
 def to_code(value):
